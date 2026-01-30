@@ -1,23 +1,42 @@
 {
     "name": "git-cherry-release",
-    "version": "1.0.0",
-    "description": "CLI tool to cherry-pick commits from develop to release branch",
-    "main": "index.js",
+    "version": "2.0.0",
+    "description": "Interactive CLI tool to cherry-pick commits from develop to release branch",
+    "main": "src/index.js",
     "bin": {
-        "git-cherry-release": "./index.js"
+        "git-cherry-release": "./bin/cli.js"
     },
     "scripts": {
-        "test": "node test.js"
+        "start": "node bin/cli.js",
+        "test": "node tests/index.test.js",
+        "lint": "echo 'No linter configured'"
     },
     "keywords": [
         "git",
         "cherry-pick",
         "cli",
-        "release"
+        "release",
+        "interactive",
+        "workflow"
     ],
-    "author": "",
+    "author": "Danny213123",
     "license": "MIT",
+    "repository": {
+        "type": "git",
+        "url": "https://github.com/Danny213123/git-ui.git"
+    },
+    "bugs": {
+        "url": "https://github.com/Danny213123/git-ui/issues"
+    },
+    "homepage": "https://github.com/Danny213123/git-ui#readme",
     "engines": {
         "node": ">=14.0.0"
-    }
+    },
+    "files": [
+        "bin/",
+        "src/",
+        "README.md",
+        "LICENSE",
+        "CHANGELOG.md"
+    ]
 }

@@ -11,7 +11,7 @@ const { execSync } = require('child_process');
 const assert = require('assert');
 const path = require('path');
 
-const CLI_PATH = path.join(__dirname, 'index.js');
+const CLI_PATH = path.join(__dirname, '..', 'bin', 'cli.js');
 
 let passed = 0;
 let failed = 0;
