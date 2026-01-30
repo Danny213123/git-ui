@@ -1,0 +1,23 @@
+{
+    "name": "git-cherry-release",
+    "version": "1.0.0",
+    "description": "CLI tool to cherry-pick commits from develop to release branch",
+    "main": "index.js",
+    "bin": {
+        "git-cherry-release": "./index.js"
+    },
+    "scripts": {
+        "test": "node test.js"
+    },
+    "keywords": [
+        "git",
+        "cherry-pick",
+        "cli",
+        "release"
+    ],
+    "author": "",
+    "license": "MIT",
+    "engines": {
+        "node": ">=14.0.0"
+    }
+}
