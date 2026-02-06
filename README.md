@@ -41,6 +41,7 @@ Shows a mode selection menu:
 - **Quick Release** - Cherry-pick last N commits from develop to release
 - **Interactive Mode** - Full control over commits, remotes, and branches
 - **Utilities** - Useful git commands (revert, go to commit, git tree, status, logs, branch compare, stash manager, branch cleanup, conflict helper)
+- **Remote Sync** - Sync two remotes with merge safety and multiple confirmations
 
 ### Quick Release Mode
 
@@ -77,6 +78,7 @@ Features:
 | `--log [n]` | Show recent commits (default 20) |
 | `--revert <k>` | Revert last k commits on current branch |
 | `--goto <ref>` | Go to commit (detached by default) |
+| `--sync` | Sync two remotes (interactive) |
 | `--soft` | Use soft reset with `--goto` |
 | `--mixed` | Use mixed reset with `--goto` |
 | `--hard` | Use hard reset with `--goto` |
@@ -126,6 +128,9 @@ git-ui --goto HEAD~3
 
 # Reset current branch to a commit (hard)
 git-ui --goto abc1234 --hard
+
+# Sync two remotes (interactive)
+git-ui --sync
 ```
 
 ## Interactive Mode Example
@@ -158,15 +163,16 @@ git-ui --goto abc1234 --hard
 ═══════════════════════════════════════════════════════════
 
   Options:
-    [1] Revert last N commits
-    [2] Go to a specific commit
-    [3] View git tree
-    [4] Show git status
-    [5] Show recent commits
-    [6] Compare branches
-    [7] Stash manager
-    [8] Branch cleanup
-    [9] Conflict helper
+    [1] Sync two remotes
+    [2] Revert last N commits
+    [3] Go to a specific commit
+    [4] View git tree
+    [5] Show git status
+    [6] Show recent commits
+    [7] Compare branches
+    [8] Stash manager
+    [9] Branch cleanup
+    [10] Conflict helper
     [0] Exit
 ```
 

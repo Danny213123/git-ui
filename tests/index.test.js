@@ -116,6 +116,7 @@ test('Help shows utilities options', () => {
     assert(result.output.includes('--goto'), 'Should show --goto option');
     assert(result.output.includes('--tree'), 'Should show --tree option');
     assert(result.output.includes('--status'), 'Should show --status option');
+    assert(result.output.includes('--sync'), 'Should show --sync option');
     assert(result.output.includes('-u'), 'Should show -u option');
 });
 

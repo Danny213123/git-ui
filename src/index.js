@@ -247,6 +247,19 @@ function getRemotes() {
     }
 }
 
+function getRemoteBranches(remote) {
+    try {
+        const output = execGit('branch -r --format=%(refname:short)', true);
+        return output
+            .split('\n')
+            .filter(b => b.startsWith(`${remote}/`) && !b.includes('HEAD'))
+            .map(b => b.replace(`${remote}/`, ''))
+            .filter(Boolean);
+    } catch {
+        return [];
+    }
+}
+
 /**
  * Get all branches (local and remote)
  */
@@ -329,6 +342,37 @@ function getConflictedFiles() {
     try {
         const output = execGit('diff --name-only --diff-filter=U', true);
         return output.split('\n').filter(f => f.length > 0);
+    } catch {
+        return [];
+    }
+}
+
+function isAncestor(ancestorRef, descendantRef) {
+    try {
+        execGit(`merge-base --is-ancestor ${ancestorRef} ${descendantRef}`, true);
+        return true;
+    } catch {
+        return false;
+    }
+}
+
+function getAheadBehind(leftRef, rightRef) {
+    try {
+        const output = execGit(`rev-list --left-right --count ${leftRef}...${rightRef}`, true);
+        const [left, right] = output.trim().split(/\s+/).map(v => parseInt(v, 10));
+        return {
+            left: Number.isNaN(left) ? 0 : left,
+            right: Number.isNaN(right) ? 0 : right,
+        };
+    } catch {
+        return { left: 0, right: 0 };
+    }
+}
+
+function getCommitHashesBetween(baseRef, compareRef) {
+    try {
+        const output = execGit(`log --format=%H ${baseRef}..${compareRef}`, true);
+        return output.split('\n').filter(Boolean);
     } catch {
         return [];
     }
@@ -510,6 +554,147 @@ async function checkMergeSafety(commits, targetRemote, targetBranch) {
     } else {
         log('─'.repeat(50), chalk.green);
         logSuccess('All checks passed! Safe to proceed with cherry-pick.');
+        log('─'.repeat(50), chalk.green);
+    }
+
+    await pause();
+}
+
+async function checkMergeSafetyForSync(commits, targetRef, sourceRef, canFastForward) {
+    clearScreen();
+    printHeader('Sync Merge Safety');
+
+    if (commits.length === 0) {
+        logError('No commits selected to check!');
+        await pause();
+        return;
+    }
+
+    log(`\n  Checking ${commits.length} commit(s) from ${chalk.cyan(sourceRef)} against ${chalk.magenta(targetRef)}...\n`);
+
+    let hasIssues = false;
+
+    // 1. Check for potential conflicts (diverged history)
+    log('  [1/4] Checking for potential conflicts...', chalk.cyan);
+    try {
+        if (!canFastForward) {
+            const allFiles = new Set();
+            for (const commit of commits) {
+                const files = execGit(`diff-tree --no-commit-id --name-only -r ${commit.fullHash}`, true);
+                files.split('\n').filter(f => f.length > 0).forEach(f => allFiles.add(f));
+            }
+
+            const diffFiles = execGit(`diff --name-only ${targetRef}...${sourceRef}`, true);
+            const diffSet = new Set(diffFiles.split('\n').filter(f => f.length > 0));
+            const conflictFiles = [...allFiles].filter(f => diffSet.has(f));
+
+            if (conflictFiles.length > 0) {
+                logWarning(`  Potential conflicts in ${conflictFiles.length} file(s):`);
+                conflictFiles.slice(0, 10).forEach(f => log(`      • ${f}`, chalk.yellow));
+                if (conflictFiles.length > 10) {
+                    log(`      ... and ${conflictFiles.length - 10} more`, chalk.dim);
+                }
+                hasIssues = true;
+            } else {
+                logSuccess('  No obvious file conflicts detected');
+            }
+        } else {
+            logSuccess('  Fast-forward possible (no divergent history)');
+        }
+    } catch (e) {
+        logWarning(`  Could not check for conflicts: ${e.message}`);
+    }
+
+    // 2. Check for invalid directory/file names
+    log('\n  [2/4] Checking for invalid directory/file names...', chalk.cyan);
+    try {
+        const allFiles = [];
+        for (const commit of commits) {
+            const files = execGit(`diff-tree --no-commit-id --name-only -r ${commit.fullHash}`, true);
+            files.split('\n').filter(f => f.length > 0).forEach(f => allFiles.push(f));
+        }
+
+        const nameIssues = hasInvalidNames(allFiles);
+        if (nameIssues.length > 0) {
+            logWarning(`  Found ${nameIssues.length} naming issue(s):`);
+            nameIssues.slice(0, 10).forEach(({ file, issue }) => {
+                log(`      • ${file}: ${issue}`, chalk.yellow);
+            });
+            if (nameIssues.length > 10) {
+                log(`      ... and ${nameIssues.length - 10} more`, chalk.dim);
+            }
+            hasIssues = true;
+        } else {
+            logSuccess('  All file/directory names are valid');
+        }
+    } catch (e) {
+        logWarning(`  Could not check file names: ${e.message}`);
+    }
+
+    // 3. Check for large files
+    log('\n  [3/4] Checking for large files...', chalk.cyan);
+    try {
+        const largeFiles = [];
+        for (const commit of commits) {
+            const output = execGit(`diff-tree --no-commit-id -r --numstat ${commit.fullHash}`, true);
+            output.split('\n').filter(l => l.length > 0).forEach(line => {
+                const [added] = line.split('\t');
+                if (added !== '-' && parseInt(added) > 10000) {
+                    const file = line.split('\t')[2];
+                    largeFiles.push({ file, lines: parseInt(added) });
+                }
+            });
+        }
+
+        if (largeFiles.length > 0) {
+            logWarning(`  Found ${largeFiles.length} large file(s) (>10k lines added):`);
+            largeFiles.forEach(({ file, lines }) => {
+                log(`      • ${file}: +${lines.toLocaleString()} lines`, chalk.yellow);
+            });
+            hasIssues = true;
+        } else {
+            logSuccess('  No unusually large files detected');
+        }
+    } catch (e) {
+        logWarning(`  Could not check file sizes: ${e.message}`);
+    }
+
+    // 4. Check for binary files
+    log('\n  [4/4] Checking for binary files...', chalk.cyan);
+    try {
+        const binaryFiles = [];
+        for (const commit of commits) {
+            const output = execGit(`diff-tree --no-commit-id -r --numstat ${commit.fullHash}`, true);
+            output.split('\n').filter(l => l.length > 0).forEach(line => {
+                if (line.startsWith('-\t-\t')) {
+                    const file = line.split('\t')[2];
+                    binaryFiles.push(file);
+                }
+            });
+        }
+
+        if (binaryFiles.length > 0) {
+            logWarning(`  Found ${binaryFiles.length} binary file(s):`);
+            binaryFiles.slice(0, 10).forEach(f => log(`      • ${f}`, chalk.yellow));
+            if (binaryFiles.length > 10) {
+                log(`      ... and ${binaryFiles.length - 10} more`, chalk.dim);
+            }
+        } else {
+            logSuccess('  No binary files detected');
+        }
+    } catch (e) {
+        logWarning(`  Could not check for binary files: ${e.message}`);
+    }
+
+    // Summary
+    log('');
+    if (hasIssues) {
+        log('─'.repeat(50), chalk.yellow);
+        logWarning('Some potential issues detected. Review before proceeding.');
+        log('─'.repeat(50), chalk.yellow);
+    } else {
+        log('─'.repeat(50), chalk.green);
+        logSuccess('All checks passed! Safe to proceed with sync.');
         log('─'.repeat(50), chalk.green);
     }
 
@@ -1086,6 +1271,181 @@ function getLocalBranchesByMergeState(merged = true) {
     }
 }
 
+async function showRemoteSyncMenu() {
+    if (!isInteractiveSession()) {
+        logError('Remote sync requires an interactive TTY.');
+        return;
+    }
+
+    clearScreen();
+    printHeader('Sync Remote Repos');
+
+    const remotes = Object.keys(getRemotes());
+    if (remotes.length < 2) {
+        logError('At least two remotes are required to sync.');
+        await pause();
+        return;
+    }
+
+    const sourceRemote = await select({
+        message: 'Select source remote',
+        choices: [...remotes.map(name => ({ name, value: name })), { name: 'Cancel', value: null }],
+    });
+    if (!sourceRemote) return;
+
+    const targetRemote = await select({
+        message: 'Select target remote',
+        choices: [
+            ...remotes.filter(r => r !== sourceRemote).map(name => ({ name, value: name })),
+            { name: 'Cancel', value: null },
+        ],
+    });
+    if (!targetRemote) return;
+
+    // Fetch latest
+    try {
+        execGitWithSpinner(`fetch ${sourceRemote}`, `Fetching ${sourceRemote}...`);
+        execGitWithSpinner(`fetch ${targetRemote}`, `Fetching ${targetRemote}...`);
+    } catch (error) {
+        logWarning(`Fetch warning: ${error.message}`);
+    }
+
+    const branches = getRemoteBranches(sourceRemote);
+    if (branches.length === 0) {
+        logError(`No branches found on ${sourceRemote}.`);
+        await pause();
+        return;
+    }
+
+    const branch = await select({
+        message: `Select branch to sync from ${sourceRemote}`,
+        choices: [...branches.map(name => ({ name, value: name })), { name: 'Cancel', value: null }],
+        pageSize: 12,
+    });
+    if (!branch) return;
+
+    const sourceRef = `${sourceRemote}/${branch}`;
+    const targetRef = `${targetRemote}/${branch}`;
+
+    const sourceSha = resolveCommit(sourceRef);
+    const targetSha = resolveCommit(targetRef);
+
+    if (!sourceSha) {
+        logError(`Unable to resolve source ref: ${sourceRef}`);
+        await pause();
+        return;
+    }
+
+    if (!targetSha) {
+        logWarning(`Target branch ${targetRef} does not exist. It will be created.`);
+    }
+
+    const canFastForward = targetSha ? isAncestor(targetRef, sourceRef) : true;
+    const counts = targetSha ? getAheadBehind(targetRef, sourceRef) : { left: 0, right: 0 };
+    const ahead = counts.right;
+    const behind = counts.left;
+
+    const commitHashes = targetSha
+        ? getCommitHashesBetween(targetRef, sourceRef)
+        : execGit(`log --format=%H ${sourceRef}`, true).split('\n').filter(Boolean);
+    const commits = commitHashes.map(hash => getCommitInfo(hash));
+
+    await checkMergeSafetyForSync(commits, targetRef, sourceRef, canFastForward);
+
+    // Review 1/3: Summary
+    log('\n  Sync Summary:', chalk.bold);
+    log(`  Source: ${chalk.cyan(sourceRef)} (${sourceSha.substring(0, 7)})`);
+    log(`  Target: ${chalk.magenta(targetRef)} (${targetSha ? targetSha.substring(0, 7) : 'new'})`);
+    if (targetSha) {
+        log(`  Ahead/Behind: ${chalk.green(sourceRemote)} is ${ahead} ahead, ${behind} behind ${chalk.green(targetRemote)}`);
+    }
+    if (!canFastForward) {
+        logWarning('  Histories have diverged; fast-forward is not possible.');
+    }
+
+    const review1 = await confirm('Review 1/3: Continue to commit list?');
+    if (!review1) {
+        logWarning('Sync cancelled.');
+        return;
+    }
+
+    // Review 2/3: Commit list
+    if (commits.length === 0) {
+        logWarning('No commits to sync.');
+        return;
+    }
+
+    log('\n  Commits to sync:\n');
+    commits.slice(0, 20).forEach(commit => {
+        log(`    • ${chalk.yellow(commit.shortHash)} ${commit.message.substring(0, 70)}`);
+    });
+    if (commits.length > 20) {
+        log(`    ... and ${commits.length - 20} more`, chalk.dim);
+    }
+
+    const review2 = await confirm('Review 2/3: Continue to diff summary?');
+    if (!review2) {
+        logWarning('Sync cancelled.');
+        return;
+    }
+
+    // Review 3/3: Diff summary
+    try {
+        const diffRange = targetSha ? `${targetRef}..${sourceRef}` : sourceRef;
+        const diffStat = execGit(`diff --stat ${diffRange}`, true);
+        if (diffStat.trim().length > 0) {
+            log('\n  Diff Summary:\n');
+            console.log(diffStat);
+        } else {
+            log('\n  No file differences detected.');
+        }
+    } catch (error) {
+        logWarning(`Could not load diff summary: ${error.message}`);
+    }
+
+    const review3 = await confirm('Review 3/3: Perform sync now?');
+    if (!review3) {
+        logWarning('Sync cancelled.');
+        return;
+    }
+
+    let force = false;
+    if (!canFastForward) {
+        force = await confirm('Non-fast-forward sync detected. Force push with --force-with-lease?');
+        if (!force) {
+            logWarning('Sync cancelled.');
+            return;
+        }
+    }
+
+    const pushArgs = force ? '--force-with-lease ' : '';
+    try {
+        execGitWithSpinner(
+            `push ${pushArgs}${targetRemote} ${sourceRef}:refs/heads/${branch}`,
+            `Syncing ${sourceRemote}/${branch} → ${targetRemote}/${branch}...`
+        );
+    } catch (error) {
+        logError(`Sync failed: ${error.message}`);
+        return;
+    }
+
+    // Verify history matches
+    try {
+        execGitWithSpinner(`fetch ${targetRemote}`, `Refreshing ${targetRemote}...`);
+        const newTargetSha = resolveCommit(targetRef);
+        const newSourceSha = resolveCommit(sourceRef);
+        if (newTargetSha && newSourceSha && newTargetSha === newSourceSha) {
+            logSuccess('Sync complete. Commit history matches.');
+        } else {
+            logWarning('Sync completed, but commit history does not match.');
+        }
+    } catch (error) {
+        logWarning(`Could not verify history: ${error.message}`);
+    }
+
+    await pause();
+}
+
 async function showBranchCleanupMenu() {
     const protectedBranches = new Set(['main', 'master', 'develop', 'release', 'trunk']);
     const currentBranch = getCurrentBranch();
@@ -1267,6 +1627,7 @@ async function showUtilitiesMenu() {
         const choice = await select({
             message: 'Choose an option',
             choices: [
+                { name: 'Sync two remotes', value: 'sync' },
                 { name: 'Revert last N commits', value: 'revert' },
                 { name: 'Go to a specific commit', value: 'goto' },
                 { name: 'View git tree', value: 'tree' },
@@ -1281,6 +1642,9 @@ async function showUtilitiesMenu() {
         });
 
         switch (choice) {
+            case 'sync':
+                await showRemoteSyncMenu();
+                break;
             case 'revert':
                 await revertCommitsMenu();
                 break;
@@ -1886,6 +2250,7 @@ ${chalk.cyan('Usage:')}
   git-ui --log [n]     Show recent commits (default 20)
   git-ui --revert <k>  Revert last k commits on current branch
   git-ui --goto <ref>  Go to commit (default: detached HEAD)
+  git-ui --sync        Sync two remotes (interactive)
                                    Optional: --soft, --mixed, --hard
 
 ${chalk.cyan('Quick Release Options:')}
@@ -1946,6 +2311,11 @@ ${chalk.cyan('Example:')}
                 : args.includes('--hard') ? 'hard'
                     : 'detach';
         await goToCommit(value, mode, dryRun, false);
+        return;
+    }
+
+    if (args.includes('--sync')) {
+        await showRemoteSyncMenu();
         return;
     }
 

@@ -9,6 +9,7 @@ All notable changes to git-ui will be documented in this file.
 - **Stash Manager** - list, apply, pop, drop, and create stashes
 - **Branch Cleanup** - delete merged branches or force-delete unmerged branches
 - **Conflict Helper** - guided cherry-pick conflict resolution menu
+- **Remote Sync** - sync two remotes with merge safety and multi-step confirmation
 
 ### Changed
 - Interactive and Quick Release menus now use checkbox/list prompts
