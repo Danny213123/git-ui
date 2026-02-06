@@ -1,6 +1,16 @@
 # Changelog
 
-All notable changes to git-cherry-release will be documented in this file.
+All notable changes to git-ui will be documented in this file.
+
+## [2.1.0] - 2026-02-06
+
+### Added
+- **Developer Utilities Menu** - A new toolbox of git commands
+  - Revert the last N commits (with confirmation and conflict guidance)
+  - Go to a specific commit (detached checkout or reset modes)
+  - View git tree, status, recent commits, and branch compare
+- **Direct utility commands** for scripting:
+  - `--tree`, `--status`, `--log`, `--revert`, `--goto`, `--soft`, `--mixed`, `--hard`
 
 ## [2.0.0] - 2026-01-29
 

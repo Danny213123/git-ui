@@ -1,14 +1,14 @@
 #!/usr/bin/env node
 
 /**
- * git-cherry-release CLI Tool
+ * git-ui CLI Tool
  * 
  * This tool automates the process of cherry-picking commits and pushing to remotes.
  * 
  * Usage:
- *   git-cherry-release           # Interactive mode selector
- *   git-cherry-release <k>       # Quick release: cherry-pick last k commits
- *   git-cherry-release -i        # Direct to interactive mode
+ *   git-ui           # Interactive mode selector
+ *   git-ui <k>       # Quick release: cherry-pick last k commits
+ *   git-ui -i        # Direct to interactive mode
  */
 
 const { execSync } = require('child_process');
@@ -29,6 +29,8 @@ const colors = {
     bgBlue: '\x1b[44m',
     bgMagenta: '\x1b[45m',
 };
+
+let skipAllConfirm = false;
 
 function log(message, color = colors.reset) {
     console.log(`${color}${message}${colors.reset}`);
@@ -160,6 +162,9 @@ function prompt(question) {
  * Prompt for confirmation
  */
 async function confirm(question) {
+    if (skipAllConfirm) {
+        return true;
+    }
     const answer = await prompt(`${question} (y/N): `);
     return answer.toLowerCase() === 'y' || answer.toLowerCase() === 'yes';
 }
@@ -280,6 +285,32 @@ function parseSelection(input, max) {
     }
 
     return Array.from(selected).sort((a, b) => a - b);
+}
+
+/**
+ * Resolve a commit-ish to a full commit hash
+ */
+function resolveCommit(ref) {
+    try {
+        return execGit(`rev-parse --verify ${ref}^{commit}`, true);
+    } catch {
+        return null;
+    }
+}
+
+function formatTimestamp() {
+    const d = new Date();
+    const pad = (n) => String(n).padStart(2, '0');
+    return `${d.getFullYear()}${pad(d.getMonth() + 1)}${pad(d.getDate())}-${pad(d.getHours())}${pad(d.getMinutes())}${pad(d.getSeconds())}`;
+}
+
+function sanitizeBranchName(name) {
+    return name.replace(/[^a-zA-Z0-9._/-]+/g, '-');
+}
+
+function createSafetyBranchName(currentBranch, shortHash) {
+    const base = sanitizeBranchName(currentBranch || 'detached');
+    return `backup/${base}-${shortHash}-${formatTimestamp()}`;
 }
 
 /**
@@ -465,12 +496,471 @@ async function checkMergeSafety(commits, targetRemote, targetBranch) {
 }
 
 // ============================================================
+// UTILITIES
+// ============================================================
+
+async function showGitTree(limit = 50, pauseAfter = true) {
+    if (pauseAfter) {
+        clearScreen();
+    }
+    printHeader('Git Tree');
+
+    const safeLimit = Number.isInteger(limit) && limit > 0 ? limit : 50;
+    try {
+        const output = execGit(`log --graph --decorate --oneline --all --color=always -n ${safeLimit}`, true);
+        console.log(output);
+    } catch (error) {
+        logError(`Failed to load git tree: ${error.message}`);
+    }
+
+    if (pauseAfter) {
+        await prompt('\nPress Enter to continue...');
+    }
+}
+
+async function showStatus(pauseAfter = true) {
+    if (pauseAfter) {
+        clearScreen();
+    }
+    printHeader('Git Status');
+
+    try {
+        const output = execGit('status -sb', true);
+        console.log(output);
+    } catch (error) {
+        logError(`Failed to load status: ${error.message}`);
+    }
+
+    if (pauseAfter) {
+        await prompt('\nPress Enter to continue...');
+    }
+}
+
+async function showRecentLog(limit = 20, pauseAfter = true) {
+    if (pauseAfter) {
+        clearScreen();
+    }
+    printHeader('Recent Commits');
+
+    const safeLimit = Number.isInteger(limit) && limit > 0 ? limit : 20;
+    try {
+        const output = execGit(`log -n ${safeLimit} --oneline --decorate --color=always`, true);
+        console.log(output);
+    } catch (error) {
+        logError(`Failed to load commits: ${error.message}`);
+    }
+
+    if (pauseAfter) {
+        await prompt('\nPress Enter to continue...');
+    }
+}
+
+async function selectBranchPrompt(title, allowRemote = true) {
+    const { local, remote } = getBranches();
+    const branches = allowRemote ? [...local, ...remote] : local;
+    const current = getCurrentBranch();
+
+    if (branches.length === 0) {
+        logError('No branches found');
+        await prompt('Press Enter to continue...');
+        return null;
+    }
+
+    let filter = '';
+
+    while (true) {
+        clearScreen();
+        printSubHeader(title);
+
+        const filtered = filter
+            ? branches.filter(b => b.toLowerCase().includes(filter.toLowerCase()))
+            : branches;
+
+        if (filter) {
+            log(`\n  Search: ${colors.cyan}${filter}${colors.reset} (${filtered.length} matches)`);
+        } else {
+            log(`\n  Type to search or enter a number:`);
+        }
+
+        const displayBranches = filtered.slice(0, 20);
+        log('');
+        displayBranches.forEach((branch, i) => {
+            const isLocal = local.includes(branch);
+            const marker = branch === current ? ` ${colors.green}(current)${colors.reset}` : '';
+            const prefix = isLocal ? '' : `${colors.dim}`;
+            const suffix = isLocal ? '' : `${colors.reset}`;
+            log(`    [${i + 1}] ${prefix}${branch}${suffix}${marker}`);
+        });
+
+        if (filtered.length > 20) {
+            log(`\n    ... and ${filtered.length - 20} more (refine search)`, colors.dim);
+        }
+
+        log('\n  Commands:', colors.dim);
+        log('    [/text] Search for branches containing "text"');
+        log('    [name] Enter branch name directly');
+        log('    [number] Select branch by number');
+        log('    [0 or Enter] Cancel');
+
+        const input = await prompt('\n  > ');
+
+        if (input === '0' || input === '') {
+            return null;
+        }
+
+        if (input.startsWith('/')) {
+            filter = input.substring(1);
+            continue;
+        }
+
+        if (input.toLowerCase() === 'clear' || input === '!') {
+            filter = '';
+            continue;
+        }
+
+        if (branches.includes(input)) {
+            return input;
+        }
+
+        const idx = parseInt(input) - 1;
+        if (!isNaN(idx) && idx >= 0 && idx < displayBranches.length) {
+            return displayBranches[idx];
+        }
+
+        if (input.length > 0 && isNaN(parseInt(input, 10))) {
+            filter = input;
+        }
+    }
+}
+
+async function compareBranches(baseBranch, compareBranch, pauseAfter = true) {
+    if (pauseAfter) {
+        clearScreen();
+    }
+    printHeader('Compare Branches');
+
+    log(`\n  Base: ${colors.cyan}${baseBranch}${colors.reset}`);
+    log(`  Compare: ${colors.cyan}${compareBranch}${colors.reset}`);
+
+    try {
+        const counts = execGit(`rev-list --left-right --count ${baseBranch}...${compareBranch}`, true);
+        const [left, right] = counts.trim().split(/\s+/).map(v => parseInt(v, 10));
+        if (!isNaN(left) && !isNaN(right)) {
+            log(`\n  Ahead/Behind: ${colors.green}${compareBranch}${colors.reset} is ${right} ahead, ${left} behind ${colors.green}${baseBranch}${colors.reset}`);
+        }
+
+        const diffStat = execGit(`diff --stat ${baseBranch}...${compareBranch}`, true);
+        if (diffStat.trim().length > 0) {
+            log('\n  Diff Summary:\n');
+            console.log(diffStat);
+        } else {
+            log('\n  No file differences detected.');
+        }
+    } catch (error) {
+        logError(`Failed to compare branches: ${error.message}`);
+    }
+
+    if (pauseAfter) {
+        await prompt('\nPress Enter to continue...');
+    }
+}
+
+async function compareBranchesMenu() {
+    const baseBranch = await selectBranchPrompt('Select Base Branch');
+    if (!baseBranch) return;
+
+    const compareBranch = await selectBranchPrompt('Select Compare Branch');
+    if (!compareBranch) return;
+
+    await compareBranches(baseBranch, compareBranch, true);
+}
+
+async function revertLastCommits(count, dryRun = false, pauseAfter = true) {
+    if (pauseAfter) {
+        clearScreen();
+    }
+    printHeader('Revert Last Commits');
+
+    const k = parseInt(count, 10);
+    if (isNaN(k) || k < 1) {
+        logError('Please provide a valid number of commits to revert.');
+        if (pauseAfter) await prompt('\nPress Enter to continue...');
+        return;
+    }
+
+    const currentBranch = getCurrentBranch();
+    const commits = getCommitsFromBranch(currentBranch, k);
+
+    if (commits.length === 0) {
+        logError('No commits found to revert.');
+        if (pauseAfter) await prompt('\nPress Enter to continue...');
+        return;
+    }
+
+    if (commits.length < k) {
+        logWarning(`Only found ${commits.length} commit(s) on ${currentBranch}.`);
+    }
+
+    log(`\n  Current branch: ${colors.green}${currentBranch}${colors.reset}`);
+    log('  Commits to revert (newest → oldest):\n');
+    commits.forEach((commit, i) => {
+        log(`    [${i + 1}] ${colors.yellow}${commit.shortHash}${colors.reset} - ${commit.message.substring(0, 60)}`);
+    });
+
+    if (hasUncommittedChanges()) {
+        logWarning('Uncommitted changes detected. Revert may fail or require conflict resolution.');
+        const proceedDirty = await confirm('Continue with uncommitted changes?');
+        if (!proceedDirty) return;
+    }
+
+    const proceed = await confirm(`Revert the last ${commits.length} commit(s)?`);
+    if (!proceed) {
+        log('\nOperation cancelled.', colors.yellow);
+        if (pauseAfter) await prompt('\nPress Enter to continue...');
+        return;
+    }
+
+    if (dryRun) {
+        logWarning('\nDRY RUN - No changes will be made.');
+        commits.forEach(commit => {
+            log(`  Would revert: ${commit.shortHash} - ${commit.message.substring(0, 60)}`);
+        });
+        if (pauseAfter) await prompt('\nPress Enter to continue...');
+        return;
+    }
+
+    try {
+        for (const commit of commits) {
+            log(`  Reverting: ${commit.shortHash} - ${commit.message.substring(0, 60)}`);
+            execGit(`revert --no-edit ${commit.fullHash}`);
+            logSuccess(`Reverted ${commit.shortHash}`);
+        }
+        logSuccess('\nRevert complete.');
+    } catch (error) {
+        logError(`\nRevert failed: ${error.message}`);
+        logWarning('Resolve conflicts, then run: git revert --continue');
+        logWarning('Or to abort: git revert --abort');
+    }
+
+    if (pauseAfter) {
+        await prompt('\nPress Enter to continue...');
+    }
+}
+
+async function revertCommitsMenu() {
+    clearScreen();
+    printSubHeader('Revert Last Commits');
+
+    log('\n  Enter how many commits to revert (e.g., 3):');
+    const input = await prompt('\n  Count: ');
+    if (input === '' || input === '0') return;
+
+    await revertLastCommits(input, false, true);
+}
+
+async function goToCommit(ref, mode = 'detach', dryRun = false, pauseAfter = true) {
+    if (pauseAfter) {
+        clearScreen();
+    }
+    printHeader('Go To Commit');
+
+    if (!ref) {
+        logError('Please provide a commit reference.');
+        if (pauseAfter) await prompt('\nPress Enter to continue...');
+        return;
+    }
+
+    const resolved = resolveCommit(ref);
+    if (!resolved) {
+        logError(`Unable to resolve commit: ${ref}`);
+        if (pauseAfter) await prompt('\nPress Enter to continue...');
+        return;
+    }
+
+    const info = getCommitInfo(resolved);
+    const currentBranch = getCurrentBranch();
+
+    log(`\n  Target commit: ${colors.yellow}${info.shortHash}${colors.reset} - ${info.message.substring(0, 60)}`);
+    log(`  Date: ${colors.dim}${info.date}${colors.reset}`);
+    log(`  Current branch: ${colors.green}${currentBranch}${colors.reset}`);
+
+    if (mode === 'detach') {
+        const proceed = await confirm(`Checkout ${info.shortHash} in detached HEAD mode?`);
+        if (!proceed) return;
+
+        if (dryRun) {
+            logWarning(`\nDRY RUN - Would run: git checkout --detach ${resolved}`);
+            if (pauseAfter) await prompt('\nPress Enter to continue...');
+            return;
+        }
+
+        execGit(`checkout --detach ${resolved}`);
+        logSuccess(`Now at ${info.shortHash} (detached HEAD)`);
+        if (pauseAfter) await prompt('\nPress Enter to continue...');
+        return;
+    }
+
+    if (!['soft', 'mixed', 'hard'].includes(mode)) {
+        logError(`Invalid mode: ${mode}. Use detach, soft, mixed, or hard.`);
+        if (pauseAfter) await prompt('\nPress Enter to continue...');
+        return;
+    }
+
+    if (hasUncommittedChanges()) {
+        logWarning('Uncommitted changes detected.');
+        if (mode === 'hard') {
+            const confirmHard = await confirm('Uncommitted changes will be lost. Continue?');
+            if (!confirmHard) return;
+        }
+    }
+
+    const createBackup = await confirm('Create safety branch before reset?');
+    const shortHash = info.shortHash;
+    let backupBranch = null;
+
+    if (createBackup) {
+        backupBranch = createSafetyBranchName(currentBranch, shortHash);
+        if (dryRun) {
+            logWarning(`\nDRY RUN - Would create safety branch: ${backupBranch}`);
+        } else {
+            try {
+                execGit(`branch ${backupBranch}`);
+                logSuccess(`Created safety branch: ${backupBranch}`);
+            } catch (error) {
+                logWarning(`Could not create safety branch: ${error.message}`);
+            }
+        }
+    }
+
+    const proceed = await confirm(`Reset ${currentBranch} to ${info.shortHash} with --${mode}?`);
+    if (!proceed) return;
+
+    if (dryRun) {
+        logWarning(`\nDRY RUN - Would run: git reset --${mode} ${resolved}`);
+        if (pauseAfter) await prompt('\nPress Enter to continue...');
+        return;
+    }
+
+    execGit(`reset --${mode} ${resolved}`);
+    logSuccess(`Reset complete (${mode}).`);
+
+    if (backupBranch) {
+        log(`  Safety branch: ${backupBranch}`, colors.dim);
+    }
+
+    if (pauseAfter) {
+        await prompt('\nPress Enter to continue...');
+    }
+}
+
+async function goToCommitMenu() {
+    clearScreen();
+    printSubHeader('Go To Commit');
+
+    const currentBranch = getCurrentBranch();
+    const commits = getCommitsFromBranch(currentBranch, 30);
+
+    if (commits.length === 0) {
+        logError('No commits found on current branch');
+        await prompt('Press Enter to continue...');
+        return;
+    }
+
+    log(`\n  Commits on ${colors.green}${currentBranch}${colors.reset}:\n`);
+    commits.forEach((commit, i) => {
+        const num = String(i + 1).padStart(2, ' ');
+        log(`    [${num}] ${colors.yellow}${commit.shortHash}${colors.reset} - ${colors.dim}${commit.date}${colors.reset} - ${commit.message.substring(0, 50)}`);
+    });
+
+    log(`\n  Enter commit number, hash, or ref (e.g., HEAD~2) or [0] to cancel:`);
+    const input = await prompt('\n  Selection: ');
+    if (input === '0' || input === '') return;
+
+    let ref = input;
+    const idx = parseInt(input, 10) - 1;
+    if (!isNaN(idx) && idx >= 0 && idx < commits.length) {
+        ref = commits[idx].fullHash;
+    }
+
+    clearScreen();
+    printSubHeader('Choose Action');
+    log('\n  [1] Checkout commit (detached HEAD)');
+    log('  [2] Reset --soft (keep changes staged)');
+    log('  [3] Reset --mixed (keep changes unstaged)');
+    log('  [4] Reset --hard (discard changes)');
+    log('  [0] Cancel');
+
+    const choice = await prompt('\n  Enter choice: ');
+    switch (choice) {
+        case '1':
+            await goToCommit(ref, 'detach', false, true);
+            break;
+        case '2':
+            await goToCommit(ref, 'soft', false, true);
+            break;
+        case '3':
+            await goToCommit(ref, 'mixed', false, true);
+            break;
+        case '4':
+            await goToCommit(ref, 'hard', false, true);
+            break;
+        default:
+            return;
+    }
+}
+
+async function showUtilitiesMenu() {
+    while (true) {
+        clearScreen();
+    printHeader('git-ui - Developer Utilities');
+
+        log('\n  Options:', colors.bright);
+        log('    [1] Revert last N commits');
+        log('    [2] Go to a specific commit');
+        log('    [3] View git tree');
+        log('    [4] Show git status');
+        log('    [5] Show recent commits');
+        log('    [6] Compare branches');
+        log('    [0] Exit');
+
+        const choice = await prompt('\n  Enter choice: ');
+
+        switch (choice) {
+            case '1':
+                await revertCommitsMenu();
+                break;
+            case '2':
+                await goToCommitMenu();
+                break;
+            case '3':
+                await showGitTree(50, true);
+                break;
+            case '4':
+                await showStatus(true);
+                break;
+            case '5':
+                await showRecentLog(20, true);
+                break;
+            case '6':
+                await compareBranchesMenu();
+                break;
+            case '0':
+            case 'q':
+            case '':
+                return;
+            default:
+                logWarning('Invalid choice');
+        }
+    }
+}
+
+// ============================================================
 // INTERACTIVE MODE
 // ============================================================
 
 async function runInteractiveMode() {
     clearScreen();
-    printHeader('git-cherry-release - Interactive Mode');
+    printHeader('git-ui - Interactive Mode');
 
     let selectedCommits = [];
     let selectedRemotes = [];
@@ -810,7 +1300,8 @@ async function executeInteractiveCherryPick(commits, remotes, targetBranch) {
 // ============================================================
 
 async function runQuickRelease(initialK = null, skipConfirm = false, dryRun = false) {
-    printHeader('git-cherry-release - Quick Release');
+    skipAllConfirm = skipAllConfirm || skipConfirm;
+    printHeader('git-ui - Quick Release');
 
     if (dryRun) {
         logWarning('DRY RUN MODE - No changes will be made\n');
@@ -1059,11 +1550,12 @@ async function executeQuickRelease(commits, dryRun = false) {
 // ============================================================
 
 async function showMainMenu() {
-    printHeader('git-cherry-release');
+    printHeader('git-ui');
 
     log('\n  Select mode:', colors.bright);
     log('    [1] Quick Release - Cherry-pick from develop to release');
     log('    [2] Interactive Mode - Full control over branches, commits, and remotes');
+    log('    [3] Utilities - Useful git commands for developers');
     log('    [0] Exit');
 
     const choice = await prompt('\n  Enter choice: ');
@@ -1074,6 +1566,9 @@ async function showMainMenu() {
             break;
         case '2':
             await runInteractiveMode();
+            break;
+        case '3':
+            await showUtilitiesMenu();
             break;
         case '0':
         case 'q':
@@ -1091,16 +1586,35 @@ async function showMainMenu() {
 
 async function main() {
     const args = process.argv.slice(2);
+    const dryRun = args.includes('--dry-run');
+    skipAllConfirm = args.includes('-y') || args.includes('--yes');
+
+    const getFlagValue = (flags) => {
+        for (const flag of flags) {
+            const idx = args.indexOf(flag);
+            if (idx !== -1 && idx + 1 < args.length && !args[idx + 1].startsWith('-')) {
+                return args[idx + 1];
+            }
+        }
+        return null;
+    };
 
     // Show help
     if (args.includes('--help') || args.includes('-h')) {
         console.log(`
-${colors.bright}git-cherry-release${colors.reset} - Cherry-pick commits from develop to release
+${colors.bright}git-ui${colors.reset} - Cherry-pick commits from develop to release
 
 ${colors.cyan}Usage:${colors.reset}
-  git-cherry-release              Show mode selection menu
-  git-cherry-release <k>          Quick release: cherry-pick last k commits
-  git-cherry-release -i           Launch interactive mode directly
+  git-ui               Show mode selection menu
+  git-ui <k>           Quick release: cherry-pick last k commits
+  git-ui -i            Launch interactive mode directly
+  git-ui -u            Launch utilities menu
+  git-ui --tree [n]    Show git tree (default 50 commits)
+  git-ui --status      Show git status (short)
+  git-ui --log [n]     Show recent commits (default 20)
+  git-ui --revert <k>  Revert last k commits on current branch
+  git-ui --goto <ref>  Go to commit (default: detached HEAD)
+                                   Optional: --soft, --mixed, --hard
 
 ${colors.cyan}Quick Release Options:${colors.reset}
   -h, --help        Show this help message
@@ -1108,12 +1622,64 @@ ${colors.cyan}Quick Release Options:${colors.reset}
   --dry-run         Show what would be done without making changes
 
 ${colors.cyan}Example:${colors.reset}
-  git-cherry-release              # Show menu
-  git-cherry-release 3            # Cherry-pick last 3 commits
-  git-cherry-release 5 --dry-run  # Preview what 5 commits would be picked
-  git-cherry-release -i           # Interactive mode
+  git-ui               # Show menu
+  git-ui 3             # Cherry-pick last 3 commits
+  git-ui 5 --dry-run   # Preview what 5 commits would be picked
+  git-ui -i            # Interactive mode
+  git-ui --tree 40     # Show git tree (40 commits)
+  git-ui --revert 2    # Revert last 2 commits
+  git-ui --goto HEAD~3 # Go to commit
 `);
         process.exit(0);
+    }
+
+    // Direct utility commands (non-interactive)
+    if (args.includes('--tree') || args.includes('-t')) {
+        const value = getFlagValue(['--tree', '-t']);
+        const limit = value ? parseInt(value, 10) : 50;
+        await showGitTree(limit, false);
+        return;
+    }
+
+    if (args.includes('--status')) {
+        await showStatus(false);
+        return;
+    }
+
+    if (args.includes('--log')) {
+        const value = getFlagValue(['--log']);
+        const limit = value ? parseInt(value, 10) : 20;
+        await showRecentLog(limit, false);
+        return;
+    }
+
+    if (args.includes('--revert')) {
+        const value = getFlagValue(['--revert']);
+        if (!value) {
+            logError('Missing value for --revert. Example: --revert 3');
+            process.exit(1);
+        }
+        await revertLastCommits(value, dryRun, false);
+        return;
+    }
+
+    if (args.includes('--goto')) {
+        const value = getFlagValue(['--goto']);
+        if (!value) {
+            logError('Missing value for --goto. Example: --goto HEAD~2');
+            process.exit(1);
+        }
+        const mode = args.includes('--soft') ? 'soft'
+            : args.includes('--mixed') ? 'mixed'
+                : args.includes('--hard') ? 'hard'
+                    : 'detach';
+        await goToCommit(value, mode, dryRun, false);
+        return;
+    }
+
+    if (args.includes('-u') || args.includes('--utilities')) {
+        await showUtilitiesMenu();
+        return;
     }
 
     // Interactive mode direct
@@ -1125,9 +1691,7 @@ ${colors.cyan}Example:${colors.reset}
     // Quick release with number
     const k = parseInt(args[0], 10);
     if (!isNaN(k) && k >= 1) {
-        const skipConfirm = args.includes('-y') || args.includes('--yes');
-        const dryRun = args.includes('--dry-run');
-        await runQuickRelease(k, skipConfirm, dryRun);
+        await runQuickRelease(k, skipAllConfirm, dryRun);
         return;
     }
 

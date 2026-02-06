@@ -1,27 +1,32 @@
-# git-cherry-release
+# git-ui
 
-A CLI tool that automates cherry-picking commits and pushing to remotes with both quick release and interactive modes.
+A CLI tool that automates cherry-picking commits and pushing to remotes with both quick release and interactive modes, plus a developer utilities toolbox.
 
 ## Installation
 
-### Option 1: Run directly with Node.js
+### Option 1: Run locally (no global install)
 
 ```bash
-cd scripts/git-cherry-release
-node index.js <k>
+npm install
+./node_modules/.bin/git-ui
+```
+
+Or run via `npx`:
+
+```bash
+npx git-ui
 ```
 
 ### Option 2: Install globally via npm
 
 ```bash
-cd scripts/git-cherry-release
 npm install -g .
 ```
 
 After global installation, you can run from anywhere:
 
 ```bash
-git-cherry-release
+git-ui
 ```
 
 ## Usage
@@ -29,25 +34,26 @@ git-cherry-release
 ### Main Menu (no arguments)
 
 ```bash
-git-cherry-release
+git-ui
 ```
 
 Shows a mode selection menu:
 - **Quick Release** - Cherry-pick last N commits from develop to release
 - **Interactive Mode** - Full control over commits, remotes, and branches
+- **Utilities** - Useful git commands (revert, go to commit, git tree, status, logs, branch compare)
 
 ### Quick Release Mode
 
 ```bash
-git-cherry-release <k>          # Cherry-pick last k commits
-git-cherry-release 5 --dry-run  # Preview changes without applying
-git-cherry-release 3 -y         # Skip confirmation prompts
+git-ui <k>          # Cherry-pick last k commits
+git-ui 5 --dry-run  # Preview changes without applying
+git-ui 3 -y         # Skip confirmation prompts
 ```
 
 ### Interactive Mode
 
 ```bash
-git-cherry-release -i
+git-ui -i
 ```
 
 Features:
@@ -63,8 +69,17 @@ Features:
 |------|-------------|
 | `-h, --help` | Show help message |
 | `-i, --interactive` | Launch interactive mode directly |
+| `-u, --utilities` | Launch utilities menu directly |
 | `-y, --yes` | Skip confirmation prompts |
 | `--dry-run` | Preview changes without applying |
+| `--tree [n]` | Show git tree (default 50 commits) |
+| `--status` | Show git status (short) |
+| `--log [n]` | Show recent commits (default 20) |
+| `--revert <k>` | Revert last k commits on current branch |
+| `--goto <ref>` | Go to commit (detached by default) |
+| `--soft` | Use soft reset with `--goto` |
+| `--mixed` | Use mixed reset with `--goto` |
+| `--hard` | Use hard reset with `--goto` |
 
 ## What Quick Release Does
 
@@ -83,26 +98,41 @@ Features:
 
 ```bash
 # Show main menu
-git-cherry-release
+git-ui
 
 # Cherry-pick last 3 commits to release branches
-git-cherry-release 3
+git-ui 3
 
 # Preview what would happen without making changes
-git-cherry-release 5 --dry-run
+git-ui 5 --dry-run
 
 # Cherry-pick without confirmation prompt
-git-cherry-release 2 -y
+git-ui 2 -y
 
 # Launch interactive mode
-git-cherry-release -i
+git-ui -i
+
+# Launch utilities menu
+git-ui -u
+
+# Show git tree (last 40 commits)
+git-ui --tree 40
+
+# Revert last 2 commits
+git-ui --revert 2
+
+# Go to a specific commit (detached HEAD)
+git-ui --goto HEAD~3
+
+# Reset current branch to a commit (hard)
+git-ui --goto abc1234 --hard
 ```
 
 ## Interactive Mode Example
 
 ```
 ═══════════════════════════════════════════════════════════
-  git-cherry-release - Interactive Mode
+  git-ui - Interactive Mode
 ═══════════════════════════════════════════════════════════
 
   Current branch: develop
@@ -117,6 +147,23 @@ git-cherry-release -i
     [4] Set target branch name
     [5] Add new remote
     [6] Execute cherry-pick and push
+    [0] Exit
+```
+
+## Utilities Menu Example
+
+```
+═══════════════════════════════════════════════════════════
+  git-ui - Developer Utilities
+═══════════════════════════════════════════════════════════
+
+  Options:
+    [1] Revert last N commits
+    [2] Go to a specific commit
+    [3] View git tree
+    [4] Show git status
+    [5] Show recent commits
+    [6] Compare branches
     [0] Exit
 ```
 

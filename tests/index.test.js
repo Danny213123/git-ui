@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 /**
- * Test suite for git-cherry-release CLI tool
+ * Test suite for git-ui CLI tool
  * 
  * These tests verify the utility functions and argument parsing.
  * Note: Full integration tests would require a git repository setup.
@@ -47,13 +47,13 @@ function runCLI(args, options = {}) {
 }
 
 console.log('\n========================================');
-console.log('  git-cherry-release Test Suite');
+console.log('  git-ui Test Suite');
 console.log('========================================\n');
 
 // Test: Help flag shows usage information
 test('--help flag shows usage information', () => {
     const result = runCLI('--help');
-    assert(result.output.includes('git-cherry-release'), 'Should show tool name');
+    assert(result.output.includes('git-ui'), 'Should show tool name');
     assert(result.output.includes('Usage:'), 'Should show usage section');
     assert(result.output.includes('-i'), 'Should show -i flag for interactive mode');
     assert(result.output.includes('Example:'), 'Should show examples');
@@ -63,7 +63,7 @@ test('--help flag shows usage information', () => {
 // Test: -h flag also shows help
 test('-h flag shows usage information', () => {
     const result = runCLI('-h');
-    assert(result.output.includes('git-cherry-release'), 'Should show tool name');
+    assert(result.output.includes('git-ui'), 'Should show tool name');
     assert.strictEqual(result.exitCode, 0, 'Should exit with code 0');
 });
 
@@ -107,6 +107,16 @@ test('Help shows Quick Release Options section', () => {
     assert(result.output.includes('Quick Release Options'), 'Should show Quick Release Options');
     assert(result.output.includes('--dry-run'), 'Should show --dry-run option');
     assert(result.output.includes('--yes'), 'Should show --yes option');
+});
+
+// Test: Help shows utilities options
+test('Help shows utilities options', () => {
+    const result = runCLI('--help');
+    assert(result.output.includes('--revert'), 'Should show --revert option');
+    assert(result.output.includes('--goto'), 'Should show --goto option');
+    assert(result.output.includes('--tree'), 'Should show --tree option');
+    assert(result.output.includes('--status'), 'Should show --status option');
+    assert(result.output.includes('-u'), 'Should show -u option');
 });
 
 // Summary
