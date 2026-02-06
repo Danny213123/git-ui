@@ -2,6 +2,18 @@
 
 All notable changes to git-ui will be documented in this file.
 
+## [2.2.0] - 2026-02-06
+
+### Added
+- **Modernized interactive UI** powered by inquirer, chalk, ora, and boxen
+- **Stash Manager** - list, apply, pop, drop, and create stashes
+- **Branch Cleanup** - delete merged branches or force-delete unmerged branches
+- **Conflict Helper** - guided cherry-pick conflict resolution menu
+
+### Changed
+- Interactive and Quick Release menus now use checkbox/list prompts
+- Spinner and header rendering moved to ora and boxen
+
 ## [2.1.0] - 2026-02-06
 
 ### Added

@@ -40,7 +40,7 @@ git-ui
 Shows a mode selection menu:
 - **Quick Release** - Cherry-pick last N commits from develop to release
 - **Interactive Mode** - Full control over commits, remotes, and branches
-- **Utilities** - Useful git commands (revert, go to commit, git tree, status, logs, branch compare)
+- **Utilities** - Useful git commands (revert, go to commit, git tree, status, logs, branch compare, stash manager, branch cleanup, conflict helper)
 
 ### Quick Release Mode
 
@@ -164,6 +164,9 @@ git-ui --goto abc1234 --hard
     [4] Show git status
     [5] Show recent commits
     [6] Compare branches
+    [7] Stash manager
+    [8] Branch cleanup
+    [9] Conflict helper
     [0] Exit
 ```
 

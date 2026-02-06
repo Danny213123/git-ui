@@ -1,6 +1,6 @@
 {
     "name": "git-ui",
-    "version": "2.1.0",
+    "version": "2.2.0",
     "description": "Interactive CLI tool to cherry-pick commits from develop to release branch",
     "main": "src/index.js",
     "bin": {
@@ -31,6 +31,12 @@
     "homepage": "https://github.com/Danny213123/git-ui#readme",
     "engines": {
         "node": ">=14.0.0"
+    },
+    "dependencies": {
+        "boxen": "^5.1.2",
+        "chalk": "^4.1.2",
+        "inquirer": "^8.2.6",
+        "ora": "^5.4.1"
     },
     "files": [
         "bin/",
