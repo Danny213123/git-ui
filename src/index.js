@@ -270,21 +270,41 @@ function getRemoteHeadSha(remote, branch) {
     }
 }
 
-function ensureRemoteBranchFetched(remote, branch) {
+function ensureRemoteBranchFetched(remote, branch, remoteSha = null) {
     const ref = `${remote}/${branch}`;
-    if (resolveCommit(ref)) return true;
-    try {
-        execGit(`fetch ${remote} ${branch}`);
-    } catch {
-        // ignore and retry with explicit refspec
+    if (resolveCommit(ref)) return { ok: true };
+
+    let lastError = null;
+    const tryFetch = (cmd) => {
+        try {
+            execGit(cmd, true);
+            return true;
+        } catch (error) {
+            lastError = error.message;
+            return false;
+        }
+    };
+
+    tryFetch(`fetch ${remote} ${branch}`);
+    if (resolveCommit(ref)) return { ok: true };
+
+    tryFetch(`fetch ${remote} refs/heads/${branch}:refs/remotes/${remote}/${branch}`);
+    if (resolveCommit(ref)) return { ok: true };
+
+    tryFetch(`fetch ${remote} +refs/heads/${branch}:refs/remotes/${remote}/${branch}`);
+    if (resolveCommit(ref)) return { ok: true };
+
+    if (remoteSha) {
+        tryFetch(`fetch ${remote} ${remoteSha}`);
+        try {
+            execGit(`update-ref refs/remotes/${remote}/${branch} ${remoteSha}`, true);
+        } catch (error) {
+            lastError = error.message;
+        }
+        if (resolveCommit(ref)) return { ok: true };
     }
-    if (resolveCommit(ref)) return true;
-    try {
-        execGit(`fetch ${remote} ${branch}:refs/remotes/${remote}/${branch}`);
-    } catch {
-        // ignore and retry
-    }
-    return Boolean(resolveCommit(ref));
+
+    return { ok: false, error: lastError };
 }
 
 /**
@@ -1377,10 +1397,13 @@ async function showRemoteSyncMenu() {
         logWarning(`Target branch ${targetRef} does not exist. It will be created.`);
     }
 
-    const sourceFetched = ensureRemoteBranchFetched(sourceRemote, branch);
-    if (!sourceFetched) {
+    const sourceFetched = ensureRemoteBranchFetched(sourceRemote, branch, remoteSourceSha);
+    if (!sourceFetched.ok) {
         logError(`Unable to resolve source ref: ${sourceRef}`);
         logWarning(`Try: git fetch ${sourceRemote} ${branch}`);
+        if (sourceFetched.error) {
+            logWarning(`Last fetch error: ${sourceFetched.error.split('\n')[0]}`);
+        }
         const fetchSpec = execGit(`config --get-all remote.${sourceRemote}.fetch`, true);
         if (fetchSpec) {
             log(`  current fetchspec: ${chalk.dim(fetchSpec.split('\n').join(', '))}`);
@@ -1389,22 +1412,25 @@ async function showRemoteSyncMenu() {
         return;
     }
 
-    const targetFetched = remoteTargetSha ? ensureRemoteBranchFetched(targetRemote, branch) : true;
-    if (remoteTargetSha && !targetFetched) {
+    const targetFetched = remoteTargetSha ? ensureRemoteBranchFetched(targetRemote, branch, remoteTargetSha) : { ok: true };
+    if (remoteTargetSha && !targetFetched.ok) {
         logWarning(`Unable to resolve target ref: ${targetRef}. Proceeding with remote SHA only.`);
+        if (targetFetched.error) {
+            logWarning(`Last fetch error: ${targetFetched.error.split('\n')[0]}`);
+        }
     }
 
-    const sourceSha = resolveCommit(sourceRef);
-    const targetSha = resolveCommit(targetRef);
+    const sourceSha = resolveCommit(sourceRef) || remoteSourceSha;
+    const targetSha = resolveCommit(targetRef) || remoteTargetSha;
 
-    const canFastForward = targetSha ? isAncestor(targetRef, sourceRef) : true;
-    const counts = targetSha ? getAheadBehind(targetRef, sourceRef) : { left: 0, right: 0 };
+    const canFastForward = targetSha ? isAncestor(targetSha, sourceSha) : true;
+    const counts = targetSha ? getAheadBehind(targetSha, sourceSha) : { left: 0, right: 0 };
     const ahead = counts.right;
     const behind = counts.left;
 
     const commitHashes = targetSha
-        ? getCommitHashesBetween(targetRef, sourceRef)
-        : execGit(`log --format=%H ${sourceRef}`, true).split('\n').filter(Boolean);
+        ? getCommitHashesBetween(targetSha, sourceSha)
+        : execGit(`log --format=%H ${sourceSha}`, true).split('\n').filter(Boolean);
     const commits = commitHashes.map(hash => getCommitInfo(hash));
 
     await checkMergeSafetyForSync(commits, targetRef, sourceRef, canFastForward);
@@ -1448,7 +1474,7 @@ async function showRemoteSyncMenu() {
 
     // Review 3/3: Diff summary
     try {
-        const diffRange = targetSha ? `${targetRef}..${sourceRef}` : sourceRef;
+        const diffRange = targetSha ? `${targetSha}..${sourceSha}` : sourceSha;
         const diffStat = execGit(`diff --stat ${diffRange}`, true);
         if (diffStat.trim().length > 0) {
             log('\n  Diff Summary:\n');
