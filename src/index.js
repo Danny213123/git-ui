@@ -274,6 +274,12 @@ function ensureRemoteBranchFetched(remote, branch) {
     const ref = `${remote}/${branch}`;
     if (resolveCommit(ref)) return true;
     try {
+        execGit(`fetch ${remote} ${branch}`);
+    } catch {
+        // ignore and retry with explicit refspec
+    }
+    if (resolveCommit(ref)) return true;
+    try {
         execGit(`fetch ${remote} ${branch}:refs/remotes/${remote}/${branch}`);
     } catch {
         // ignore and retry
@@ -1363,7 +1369,7 @@ async function showRemoteSyncMenu() {
     const sourceFetched = ensureRemoteBranchFetched(sourceRemote, branch);
     if (!sourceFetched) {
         logError(`Unable to resolve source ref: ${sourceRef}`);
-        logWarning(`Try: git fetch ${sourceRemote} ${branch}:refs/remotes/${sourceRemote}/${branch}`);
+        logWarning(`Try: git fetch ${sourceRemote} ${branch}`);
         await pause();
         return;
     }
