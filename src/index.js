@@ -260,6 +260,27 @@ function getRemoteBranches(remote) {
     }
 }
 
+function getRemoteHeadSha(remote, branch) {
+    try {
+        const output = execGit(`ls-remote --heads ${remote} ${branch}`, true);
+        if (!output.trim()) return null;
+        return output.trim().split(/\s+/)[0] || null;
+    } catch {
+        return null;
+    }
+}
+
+function ensureRemoteBranchFetched(remote, branch) {
+    const ref = `${remote}/${branch}`;
+    if (resolveCommit(ref)) return true;
+    try {
+        execGit(`fetch ${remote} ${branch}:refs/remotes/${remote}/${branch}`);
+    } catch {
+        // ignore and retry
+    }
+    return Boolean(resolveCommit(ref));
+}
+
 /**
  * Get all branches (local and remote)
  */
@@ -1327,18 +1348,33 @@ async function showRemoteSyncMenu() {
     const sourceRef = `${sourceRemote}/${branch}`;
     const targetRef = `${targetRemote}/${branch}`;
 
-    const sourceSha = resolveCommit(sourceRef);
-    const targetSha = resolveCommit(targetRef);
-
-    if (!sourceSha) {
-        logError(`Unable to resolve source ref: ${sourceRef}`);
+    const remoteSourceSha = getRemoteHeadSha(sourceRemote, branch);
+    if (!remoteSourceSha) {
+        logError(`Source branch not found on ${sourceRemote}: ${branch}`);
         await pause();
         return;
     }
 
-    if (!targetSha) {
+    const remoteTargetSha = getRemoteHeadSha(targetRemote, branch);
+    if (!remoteTargetSha) {
         logWarning(`Target branch ${targetRef} does not exist. It will be created.`);
     }
+
+    const sourceFetched = ensureRemoteBranchFetched(sourceRemote, branch);
+    if (!sourceFetched) {
+        logError(`Unable to resolve source ref: ${sourceRef}`);
+        logWarning(`Try: git fetch ${sourceRemote} ${branch}:refs/remotes/${sourceRemote}/${branch}`);
+        await pause();
+        return;
+    }
+
+    const targetFetched = remoteTargetSha ? ensureRemoteBranchFetched(targetRemote, branch) : true;
+    if (remoteTargetSha && !targetFetched) {
+        logWarning(`Unable to resolve target ref: ${targetRef}. Proceeding with remote SHA only.`);
+    }
+
+    const sourceSha = resolveCommit(sourceRef);
+    const targetSha = resolveCommit(targetRef);
 
     const canFastForward = targetSha ? isAncestor(targetRef, sourceRef) : true;
     const counts = targetSha ? getAheadBehind(targetRef, sourceRef) : { left: 0, right: 0 };
@@ -1354,8 +1390,8 @@ async function showRemoteSyncMenu() {
 
     // Review 1/3: Summary
     log('\n  Sync Summary:', chalk.bold);
-    log(`  Source: ${chalk.cyan(sourceRef)} (${sourceSha.substring(0, 7)})`);
-    log(`  Target: ${chalk.magenta(targetRef)} (${targetSha ? targetSha.substring(0, 7) : 'new'})`);
+    log(`  Source: ${chalk.cyan(sourceRef)} (${(sourceSha || remoteSourceSha).substring(0, 7)})`);
+    log(`  Target: ${chalk.magenta(targetRef)} (${targetSha ? targetSha.substring(0, 7) : (remoteTargetSha ? remoteTargetSha.substring(0, 7) : 'new')})`);
     if (targetSha) {
         log(`  Ahead/Behind: ${chalk.green(sourceRemote)} is ${ahead} ahead, ${behind} behind ${chalk.green(targetRemote)}`);
     }
@@ -1431,9 +1467,8 @@ async function showRemoteSyncMenu() {
 
     // Verify history matches
     try {
-        execGitWithSpinner(`fetch ${targetRemote}`, `Refreshing ${targetRemote}...`);
-        const newTargetSha = resolveCommit(targetRef);
-        const newSourceSha = resolveCommit(sourceRef);
+        const newTargetSha = getRemoteHeadSha(targetRemote, branch);
+        const newSourceSha = getRemoteHeadSha(sourceRemote, branch);
         if (newTargetSha && newSourceSha && newTargetSha === newSourceSha) {
             logSuccess('Sync complete. Commit history matches.');
         } else {
