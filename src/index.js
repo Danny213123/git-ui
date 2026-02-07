@@ -1354,9 +1354,20 @@ async function showRemoteSyncMenu() {
     const sourceRef = `${sourceRemote}/${branch}`;
     const targetRef = `${targetRemote}/${branch}`;
 
-    const remoteSourceSha = getRemoteHeadSha(sourceRemote, branch);
+    let remoteSourceSha = getRemoteHeadSha(sourceRemote, branch);
+    if (!remoteSourceSha) {
+        try {
+            execGitWithSpinner(`fetch ${sourceRemote} --prune`, `Refreshing ${sourceRemote}...`);
+            remoteSourceSha = getRemoteHeadSha(sourceRemote, branch);
+        } catch (error) {
+            logWarning(`Fetch warning: ${error.message}`);
+        }
+    }
+
     if (!remoteSourceSha) {
         logError(`Source branch not found on ${sourceRemote}: ${branch}`);
+        logWarning('If you see the branch locally, it may be stale.');
+        logWarning(`Try: git remote prune ${sourceRemote}`);
         await pause();
         return;
     }
@@ -1370,6 +1381,10 @@ async function showRemoteSyncMenu() {
     if (!sourceFetched) {
         logError(`Unable to resolve source ref: ${sourceRef}`);
         logWarning(`Try: git fetch ${sourceRemote} ${branch}`);
+        const fetchSpec = execGit(`config --get-all remote.${sourceRemote}.fetch`, true);
+        if (fetchSpec) {
+            log(`  current fetchspec: ${chalk.dim(fetchSpec.split('\n').join(', '))}`);
+        }
         await pause();
         return;
     }
